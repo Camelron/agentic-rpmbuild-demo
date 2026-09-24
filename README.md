@@ -197,19 +197,9 @@ Single `Standard_D16as_v5` node, VM templating on, 2 vCPU / 2 GiB Pod VMs:
 
 ## Caveats and Open Items
 
-Kata-side issues are tracked with evidence in [kata-bugs.md](kata-bugs.md).
-
-- **Progenitor clock skew.** A VM cloned from the node's VM template starts
-  with the template's clock (observed about 50 h behind). Each snapshot pause
-  adds roughly the pause time on top. Restored clones are resynced. Until this
-  is fixed, the progenitor's build timestamps and any commits it makes carry
-  wrong dates, and TLS certificates issued after the template was created would
-  fail validation.
 - **Writable layer is 10 GiB** (containerd erofs `default_size`). That holds the
   mock chroot and build tree; very large packages will not fit. Disk-backed
   `emptyDir` is not captured by snapshots, so it is not a workaround.
-- **Task prompts are placeholders.** `nano` currently builds cleanly on `4.0`;
-  the demo needs genuinely failing packages or a seeded breakage.
 - **Push credentials.** Secret-volume refresh on restore is not yet verified.
   Clones will need per-clone or shared credentials and a fork remote to push to.
 - **Next:** headless copilot server as the entrypoint, postStart prompt hook.
