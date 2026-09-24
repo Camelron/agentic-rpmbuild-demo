@@ -1,0 +1,46 @@
+# Progenitor agent: briefed once, then snapshotted with
+#   ./snapshot-create.sh progenitor-agent
+# Clones in agents/ must keep this Pod spec (image, resources, securityContext,
+# env, volume names/mounts) identical; only names, labels, the snapshot
+# annotation, and the task ConfigMap name may differ.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: progenitor-agent-task
+data:
+  task.md: |
+    You are the progenitor agent. You have no package assignment yet.
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: progenitor-agent
+  labels:
+    app.kubernetes.io/name: rpmbuild-agent
+    rpmbuild-agent/role: progenitor
+spec:
+  runtimeClassName: kata-v2
+  nodeSelector:
+    snapshot-sync.katacontainers.io/source: "true"
+  restartPolicy: Never
+  containers:
+    - name: agent
+      image: agentic-rpmbuild:dev
+      imagePullPolicy: Never
+      # mock needs mount/chroot capabilities; kata-v2 confines them to the Pod VM
+      # (privileged_without_host_devices).
+      securityContext:
+        privileged: true
+      env:
+        - name: ENTRY_PROMPT
+          value: /etc/agent-task/task.md
+      # No resources: kata-v2 sizes every Pod VM from the node's
+      # static_sandbox_default_workload_{mem,vcpus}; see README.
+      volumeMounts:
+        - name: task
+          mountPath: /etc/agent-task
+          readOnly: true
+  volumes:
+    - name: task
+      configMap:
+        name: progenitor-agent-task

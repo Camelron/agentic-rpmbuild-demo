@@ -1,0 +1,44 @@
+# Clone of the progenitor agent. The Pod spec must match progenitor-agent.yaml
+# except for names, labels, the snapshot annotation, and the task ConfigMap.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nano-fixer-task
+data:
+  task.md: |
+    The package nano is failing to build. Reproduce the failure with
+    `azldev comp build -p nano`, iterate on a fix, confirm it with a clean
+    rebuild, and commit the fix to a topic branch off the current azurelinux
+    branch.
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nano-fixer
+  labels:
+    app.kubernetes.io/name: rpmbuild-agent
+    rpmbuild-agent/role: clone
+  annotations:
+    io.katacontainers.snapshot-name: progenitor-agent
+spec:
+  runtimeClassName: kata-v2
+  nodeSelector:
+    snapshot-sync.katacontainers.io/source: "true"
+  restartPolicy: Never
+  containers:
+    - name: agent
+      image: agentic-rpmbuild:dev
+      imagePullPolicy: Never
+      securityContext:
+        privileged: true
+      env:
+        - name: ENTRY_PROMPT
+          value: /etc/agent-task/task.md
+      volumeMounts:
+        - name: task
+          mountPath: /etc/agent-task
+          readOnly: true
+  volumes:
+    - name: task
+      configMap:
+        name: nano-fixer-task
