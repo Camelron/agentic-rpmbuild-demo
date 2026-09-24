@@ -1,20 +1,20 @@
 # Clone of the progenitor agent. The Pod spec must match progenitor-agent.yaml
-# except for names, labels, the snapshot annotation, and the task ConfigMap.
+# except for names, labels, the snapshot annotation, the task ConfigMap, and
+# the postStart hook.
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: cloud-hypervisor-fixer-task
+  name: ed-fixer-task
 data:
   task.md: |
-    The package cloud-hypervisor is failing to build. Reproduce the failure
-    with `azldev comp build -p cloud-hypervisor`, iterate on a fix, confirm it
-    with a clean rebuild, and commit the fix to a topic branch off the current
-    azurelinux branch.
+    The package ed is failing to build. Reproduce the failure with
+    `azldev comp build -p ed`, iterate on a fix, confirm it with a clean
+    rebuild, and push the fix to origin as branch `agent/ed-fix`.
 ---
 apiVersion: v1
 kind: Pod
 metadata:
-  name: cloud-hypervisor-fixer
+  name: ed-fixer
   labels:
     app.kubernetes.io/name: rpmbuild-agent
     rpmbuild-agent/role: clone
@@ -34,11 +34,26 @@ spec:
       env:
         - name: ENTRY_PROMPT
           value: /etc/agent-task/task.md
+        - name: COPILOT_GITHUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: copilot-auth
+              key: COPILOT_GITHUB_TOKEN
+      lifecycle:
+        postStart:
+          exec:
+            command: ["agentctl", "wake"]
       volumeMounts:
         - name: task
           mountPath: /etc/agent-task
           readOnly: true
+        - name: copilot-auth
+          mountPath: /etc/copilot-auth
+          readOnly: true
   volumes:
     - name: task
       configMap:
-        name: cloud-hypervisor-fixer-task
+        name: ed-fixer-task
+    - name: copilot-auth
+      secret:
+        secretName: copilot-auth

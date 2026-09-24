@@ -4,17 +4,17 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: nano-fixer-task
+  name: vim-fixer-task
 data:
   task.md: |
-    The package nano is failing to build. Reproduce the failure with
-    `azldev comp build -p nano`, iterate on a fix, confirm it with a clean
-    rebuild, and push the fix to origin as branch `agent/nano-fix`.
+    The package vim is failing to build. Reproduce the failure with
+    `azldev comp build -p vim`, iterate on a fix, confirm it with a clean
+    rebuild, and push the fix to origin as branch `agent/vim-fix`.
 ---
 apiVersion: v1
 kind: Pod
 metadata:
-  name: nano-fixer
+  name: vim-fixer
   labels:
     app.kubernetes.io/name: rpmbuild-agent
     rpmbuild-agent/role: clone
@@ -53,7 +53,7 @@ spec:
   volumes:
     - name: task
       configMap:
-        name: nano-fixer-task
+        name: vim-fixer-task
     - name: copilot-auth
       secret:
         secretName: copilot-auth

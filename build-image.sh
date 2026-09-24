@@ -5,8 +5,8 @@ set -Eeuo pipefail
 azldev_repo="${AZLDEV_REPO:-$HOME/repos/azure-linux-dev-tools}"
 base_image="${BASE_IMAGE:-azldev-scenario:agent}"
 image="${IMAGE:-agentic-rpmbuild:dev}"
-azl_repo_url="${AZL_REPO_URL:-https://github.com/microsoft/azurelinux.git}"
-azl_ref="${AZL_REF:-4.0}"
+azl_repo_url="${AZL_REPO_URL:-https://github.com/Camelron/azurelinux.git}"
+azl_ref="${AZL_REF:-cameronbaird/4.0/broken-packages}"
 
 usage() {
     cat <<'EOF'
@@ -20,8 +20,10 @@ Environment overrides:
                 (default: ~/repos/azure-linux-dev-tools)
   BASE_IMAGE    tag for the scenario base image (default: azldev-scenario:agent)
   IMAGE         tag for the agent image (default: agentic-rpmbuild:dev)
-  AZL_REPO_URL  azurelinux clone URL (default: upstream GitHub)
-  AZL_REF       azurelinux branch to clone (default: 4.0)
+  AZL_REPO_URL  azurelinux clone URL; agents push topic branches here
+                (default: https://github.com/Camelron/azurelinux.git)
+  AZL_REF       azurelinux branch to clone
+                (default: cameronbaird/4.0/broken-packages)
 EOF
 }
 

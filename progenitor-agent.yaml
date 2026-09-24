@@ -34,13 +34,26 @@ spec:
       env:
         - name: ENTRY_PROMPT
           value: /etc/agent-task/task.md
+        # Copilot runtime auth; env is frozen into the snapshot.
+        - name: COPILOT_GITHUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: copilot-auth
+              key: COPILOT_GITHUB_TOKEN
       # No resources: kata-v2 sizes every Pod VM from the node's
       # static_sandbox_default_workload_{mem,vcpus}; see README.
       volumeMounts:
         - name: task
           mountPath: /etc/agent-task
           readOnly: true
+        # git pushes read the token here; tool shells never see the env var.
+        - name: copilot-auth
+          mountPath: /etc/copilot-auth
+          readOnly: true
   volumes:
     - name: task
       configMap:
         name: progenitor-agent-task
+    - name: copilot-auth
+      secret:
+        secretName: copilot-auth

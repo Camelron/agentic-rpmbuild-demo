@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+url="http://127.0.0.1:8765"
+
+usage() {
+    cat <<'EOF'
+Usage: agentctl COMMAND
+
+Commands:
+  prompt TEXT   Send TEXT to the agent's current session and print the reply
+  wake          Clone start-up (postStart): fork the briefed session and begin the task
+  status        Show the current session and whether the agent is busy
+  log           Follow the agent log
+EOF
+}
+
+wait_for_agentd() {
+    local _
+    for _ in $(seq 60); do
+        curl -sf "$url/status" >/dev/null && return 0
+        sleep 1
+    done
+    printf 'agentd did not come up on %s\n' "$url" >&2
+    return 1
+}
+
+case "${1:-}" in
+    prompt)
+        shift
+        printf '%s' "$*" | curl -sS --fail-with-body --max-time 3600 --data-binary @- "$url/prompt"
+        ;;
+    wake)
+        # Kata restores the snapshot source's kernel hostname; /etc/hostname is current.
+        sudo sh -c 'cat /etc/hostname > /proc/sys/kernel/hostname' || true
+        # Never fail the hook: a failed postStart kills the container and its evidence.
+        { wait_for_agentd && curl -sS --fail-with-body -X POST "$url/wake"; } ||
+            printf 'wake failed; see ~/agent.log\n' >&2
+        ;;
+    status)
+        curl -sS --fail-with-body "$url/status"
+        ;;
+    log)
+        exec tail -n +1 -f "$HOME/agent.log"
+        ;;
+    -h|--help)
+        usage
+        ;;
+    *)
+        usage >&2
+        exit 2
+        ;;
+esac
