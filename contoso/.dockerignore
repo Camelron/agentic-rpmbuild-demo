@@ -1,0 +1,5 @@
+agent
+test
+k8s
+setup-base.mjs
+node_modules

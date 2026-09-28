@@ -1,9 +1,15 @@
 // SessionBackend on the real cluster: each chat is a kata-v2 Pod restored
-// from a Kata snapshot, driven through kubectl. Snapshot and cleanup commands
-// run on the node via the contoso-node-agent DaemonSet (k8s/node-agent.yaml).
+// from a Kata snapshot. Pods are managed with kubectl; the assistant daemon in
+// each Pod is called over the Pod network, so the server runs in the cluster
+// (k8s/web.yaml). Snapshot and cleanup commands run on the node via the
+// contoso-node-agent DaemonSet (k8s/node-agent.yaml).
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import http from "node:http";
 
 const SNAPSHOT_NAME = /^contoso-(base|[0-9a-f]{8}-g[0-9]+)$/;
+const DAEMON_PORT = 8765;
+const TOKEN_DIR = "/var/run/contoso";
 
 // Executed in the node's host namespaces; arguments are validated again there.
 const SNAPSHOT_SCRIPT = `set -eu
@@ -32,13 +38,15 @@ export class KubernetesBackend {
         image = "contoso-assistant:dev",
         baseSnapshot = "contoso-base",
         secretName = "copilot-auth",
+        tokenSecretName = "contoso-agent-token",
         nodeSelector = { "snapshot-sync.katacontainers.io/source": "true" },
         podMemoryMiB = 512,
         readyTimeoutMs = 120_000,
         kubectl = "kubectl",
     } = {}) {
-        Object.assign(this, { namespace, image, baseSnapshot, secretName, nodeSelector, podMemoryMiB, readyTimeoutMs, kubectlBin: kubectl });
+        Object.assign(this, { namespace, image, baseSnapshot, secretName, tokenSecretName, nodeSelector, podMemoryMiB, readyTimeoutMs, kubectlBin: kubectl });
         this.nodeAgents = new Map();
+        this.podIPs = new Map();
     }
 
     podName(s) {
@@ -61,7 +69,10 @@ export class KubernetesBackend {
                 nodeSelector: this.nodeSelector,
                 restartPolicy: "Never",
                 automountServiceAccountToken: false,
+                // Service env vars would change the container identity whenever a Service is added.
+                enableServiceLinks: false,
                 terminationGracePeriodSeconds: 1,
+                volumes: [{ name: "agent-token", secret: { secretName: this.tokenSecretName } }],
                 containers: [{
                     name: "assistant",
                     image: this.image,
@@ -70,6 +81,7 @@ export class KubernetesBackend {
                         name: "COPILOT_GITHUB_TOKEN",
                         valueFrom: { secretKeyRef: { name: this.secretName, key: "COPILOT_GITHUB_TOKEN" } },
                     }],
+                    volumeMounts: [{ name: "agent-token", mountPath: TOKEN_DIR, readOnly: true }],
                 }],
             },
         };
@@ -79,7 +91,7 @@ export class KubernetesBackend {
         const name = this.podName(s);
         await this.createPod(name, this.baseSnapshot);
         await this.waitReady(name);
-        await this.exec(name, ["assistantctl", "fork", `contoso-${s.id}`]);
+        await this.daemon(name, "POST", "/fork", { body: JSON.stringify({ name: `contoso-${s.id}` }) });
         return { podName: name };
     }
 
@@ -103,46 +115,29 @@ export class KubernetesBackend {
         return { podName: name };
     }
 
-    prompt(s, text, onDelta) {
-        return new Promise((resolve, reject) => {
-            const child = this.spawnKubectl(["exec", "-i", "-n", this.namespace, s.podName, "--", "assistantctl", "prompt"]);
-            let full = "";
-            let buffer = "";
-            let failure = null;
-            let stderr = "";
-            const emit = (text) => {
-                full += text;
-                onDelta(text);
-            };
-            const handle = (line) => {
-                if (!line.trim()) return;
-                let event;
-                try {
-                    event = JSON.parse(line);
-                } catch {
-                    return;
-                }
-                if (event.type === "delta") emit(event.text);
-                else if (event.type === "tool") emit(`${full && !full.endsWith("\n") ? "\n" : ""}→ ${event.name}(${summarize(event.arguments)})\n`);
-                else if (event.type === "done" && !full.trim() && event.content) emit(event.content);
-                else if (event.type === "error") failure = event.message;
-            };
-            child.stdout.setEncoding("utf8");
-            child.stdout.on("data", (chunk) => {
-                buffer += chunk;
-                const lines = buffer.split("\n");
-                buffer = lines.pop();
-                lines.forEach(handle);
-            });
-            child.stderr.on("data", (chunk) => (stderr += chunk));
-            child.on("error", reject);
-            child.on("close", (code) => {
-                handle(buffer);
-                if (failure || code !== 0) reject(new Error(failure ?? (stderr.trim() || `kubectl exec exited ${code}`)));
-                else resolve(full);
-            });
-            child.stdin.end(text);
-        });
+    async prompt(s, text, onDelta) {
+        let full = "";
+        let failure = null;
+        const emit = (delta) => {
+            full += delta;
+            onDelta(delta);
+        };
+        const onLine = (line) => {
+            if (!line.trim()) return;
+            let event;
+            try {
+                event = JSON.parse(line);
+            } catch {
+                return;
+            }
+            if (event.type === "delta") emit(event.text);
+            else if (event.type === "tool") emit(`${full && !full.endsWith("\n") ? "\n" : ""}→ ${event.name}(${summarize(event.arguments)})\n`);
+            else if (event.type === "done" && !full.trim() && event.content) emit(event.content);
+            else if (event.type === "error") failure = event.message;
+        };
+        await this.daemon(s.podName, "POST", "/prompt", { body: text, onLine });
+        if (failure) throw new Error(failure);
+        return full;
     }
 
     async destroy(s) {
@@ -171,6 +166,7 @@ export class KubernetesBackend {
     }
 
     async deletePod(name, { wait = true } = {}) {
+        this.podIPs.delete(name);
         await this.kubectl(["delete", "pod", "-n", this.namespace, name, "--ignore-not-found", `--wait=${wait}`, "--timeout=60s"]);
     }
 
@@ -178,12 +174,15 @@ export class KubernetesBackend {
         const deadline = Date.now() + this.readyTimeoutMs;
         while (Date.now() < deadline) {
             const pod = JSON.parse(await this.kubectl(["get", "pod", "-n", this.namespace, name, "-o", "json"]));
-            if (pod.status?.conditions?.some((c) => c.type === "Ready" && c.status === "True")) return pod;
+            if (pod.status?.conditions?.some((c) => c.type === "Ready" && c.status === "True")) {
+                this.podIPs.set(name, pod.status.podIP);
+                return pod;
+            }
             const state = pod.status?.containerStatuses?.[0]?.state ?? {};
             if (state.terminated || pod.status?.phase === "Failed") {
                 throw new Error(`Pod ${name} failed: ${state.terminated?.message ?? state.terminated?.reason ?? pod.status?.phase}`.slice(0, 500));
             }
-            await sleep(250);
+            await sleep(100);
         }
         const events = await this.kubectl(["get", "events", "-n", this.namespace, "--field-selector", `involvedObject.name=${name},type=Warning`, "-o", "jsonpath={.items[-1:].message}"]).catch(() => "");
         throw new Error(`Pod ${name} not Ready after ${this.readyTimeoutMs / 1000}s${events ? `: ${events.slice(0, 400)}` : ""}`);
@@ -195,7 +194,52 @@ export class KubernetesBackend {
 
     // Waits for the Pod's outbound connections to close; returns {quiet, open, waitedMs}.
     async quiesce(pod, timeoutSeconds = 45) {
-        return JSON.parse(await this.exec(pod, ["assistantctl", "quiesce", String(timeoutSeconds)]));
+        return JSON.parse(await this.daemon(pod, "POST", "/quiesce", { body: JSON.stringify({ timeoutMs: timeoutSeconds * 1000 }) }));
+    }
+
+    // --- Assistant daemon -----------------------------------------------------
+
+    // One connection per call (agent: false), so no control socket is open when a snapshot is taken.
+    async daemon(pod, method, path, { body = "", onLine } = {}) {
+        const host = this.podIPs.get(pod) ?? (await this.kubectl(["get", "pod", "-n", this.namespace, pod, "-o", "jsonpath={.status.podIP}"])).trim();
+        if (!host) throw new Error(`Pod ${pod} has no IP`);
+        this.token ??= fs.readFileSync(`${TOKEN_DIR}/token`, "utf8").trim();
+        for (let attempt = 1; ; attempt++) {
+            try {
+                return await this.#request({ host, method, path, body, onLine });
+            } catch (err) {
+                // A just-restored guest can briefly refuse connections; the request was not delivered.
+                if (!["ECONNREFUSED", "EHOSTUNREACH"].includes(err.code) || attempt >= 50) throw err;
+                await sleep(100);
+            }
+        }
+    }
+
+    #request({ host, method, path, body, onLine }) {
+        return new Promise((resolve, reject) => {
+            const headers = { authorization: `Bearer ${this.token}`, "content-length": Buffer.byteLength(body) };
+            const req = http.request({ host, port: DAEMON_PORT, method, path, headers, agent: false }, (res) => {
+                res.setEncoding("utf8");
+                const streaming = onLine && res.statusCode === 200;
+                let text = "";
+                let buffer = "";
+                res.on("data", (chunk) => {
+                    if (!streaming) return void (text += chunk);
+                    buffer += chunk;
+                    const lines = buffer.split("\n");
+                    buffer = lines.pop();
+                    lines.forEach(onLine);
+                });
+                res.on("end", () => {
+                    if (res.statusCode !== 200) return reject(new Error(`${path}: HTTP ${res.statusCode} ${text.trim()}`.slice(0, 500)));
+                    if (streaming && buffer) onLine(buffer);
+                    resolve(text);
+                });
+                res.on("error", reject);
+            });
+            req.on("error", reject);
+            req.end(body);
+        });
     }
 
     // --- Node operations ------------------------------------------------------

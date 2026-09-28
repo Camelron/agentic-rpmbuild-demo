@@ -1,6 +1,7 @@
 // Contoso.ai assistant daemon: the container's main process. It owns the
-// Copilot SDK client and serves a loopback-only control API, driven through
-// `kubectl exec <pod> -- assistantctl ...`.
+// Copilot SDK client and serves a control API on port 8765. The in-cluster
+// dashboard calls it over the Pod network with a bearer token (the
+// contoso-agent-token Secret); loopback callers (assistantctl) need none.
 //
 //   GET  /status                 {sessionId, role, busy, hostname}
 //   POST /brief      (text)      base Pod only: create the base session, send the briefing
@@ -8,6 +9,7 @@
 //   POST /reconnect              restart the runtime and reattach (manual fallback)
 //   POST /quiesce    {timeoutMs} wait until no outbound TCP connection is open (call before a snapshot)
 //   POST /prompt     (text)      NDJSON stream of {type: delta|tool|done|error}
+import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -15,6 +17,7 @@ import { CopilotClient, approveAll } from "@github/copilot-sdk";
 import { tools, toolNames } from "./tools.mjs";
 
 const PORT = 8765;
+const TOKEN_FILE = "/var/run/contoso/token";
 const BASE_SESSION_ID = "contoso-base";
 const WORKDIR = `${os.homedir()}/workspace`;
 const LOG_FILE = `${os.homedir()}/assistant.log`;
@@ -120,8 +123,9 @@ async function reconnect() {
     return { sessionId: id };
 }
 
-// Established TCP connections to anything but loopback, from the Pod network namespace.
+// Established outbound TCP connections to anything but loopback, from the Pod network namespace.
 function openConnections() {
+    const controlPort = PORT.toString(16).toUpperCase().padStart(4, "0");
     let count = 0;
     for (const file of ["/proc/net/tcp", "/proc/net/tcp6"]) {
         let lines;
@@ -131,12 +135,12 @@ function openConnections() {
             continue;
         }
         for (const line of lines) {
-            const [, , remote, st] = line.trim().split(/\s+/);
+            const [, local, remote, st] = line.trim().split(/\s+/);
             const addr = remote.split(":")[0];
             // IPv4 is little-endian hex, so 127.x.x.x ends in 7F; IPv6 covers ::1 and ::ffff:127.x.
             const loopback = (addr.length === 8 && addr.endsWith("7F")) || addr === "00000000000000000000000001000000"
                 || (addr.startsWith("0000000000000000FFFF0000") && addr.endsWith("7F"));
-            if (st === "01" && !loopback) count++;
+            if (st === "01" && !loopback && local.split(":")[1] !== controlPort) count++;
         }
     }
     return count;
@@ -241,9 +245,24 @@ const routes = {
     "POST /quiesce": async (req) => quiesce(JSON.parse((await readBody(req)) || "{}").timeoutMs),
 };
 
+// Read per request: the Secret volume is refreshed when a Pod is restored from a snapshot.
+function authorized(req) {
+    if (["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress)) return true;
+    let token;
+    try {
+        token = fs.readFileSync(TOKEN_FILE, "utf8").trim();
+    } catch {
+        return false;
+    }
+    const given = Buffer.from(req.headers.authorization ?? "");
+    const expected = Buffer.from(`Bearer ${token}`);
+    return token.length > 0 && given.length === expected.length && crypto.timingSafeEqual(given, expected);
+}
+
 http.createServer(async (req, res) => {
     const key = `${req.method} ${req.url}`;
     try {
+        if (!authorized(req)) throw Object.assign(new Error("unauthorized"), { code: 401 });
         if (key === "POST /prompt") return await prompt(req, res);
         const route = routes[key];
         if (!route) throw Object.assign(new Error("not found"), { code: 404 });
@@ -256,7 +275,7 @@ http.createServer(async (req, res) => {
         res.writeHead(err.code >= 400 && err.code < 600 ? err.code : 500, { "content-type": "application/json" });
         res.end(`${JSON.stringify({ error: err.message })}\n`);
     }
-}).listen(PORT, "127.0.0.1");
+}).listen(PORT, "0.0.0.0");
 
 process.on("SIGTERM", async () => {
     await client?.stop();

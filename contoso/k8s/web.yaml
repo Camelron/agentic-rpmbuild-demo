@@ -1,0 +1,157 @@
+# Contoso.ai dashboard server, in the cluster next to the chat Pods.
+# The dashboard has no login, so the LoadBalancer only admits ALLOWED_CIDR;
+# substitute it when applying (an unsubstituted file fails validation):
+#
+#   sed 's#ALLOWED_CIDR#203.0.113.7/32#' k8s/web.yaml | kubectl apply -f -
+#
+# Requires the contoso-agent-token Secret (key "token"), shared with chat Pods:
+#
+#   openssl rand -hex 32 | tr -d '\n' | kubectl create secret generic contoso-agent-token --from-file=token=/dev/stdin
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: contoso-web
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: contoso-web
+  namespace: default
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch, create, delete]
+  # Snapshot and cleanup scripts run through the privileged contoso-node-agent.
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: contoso-web
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: contoso-web
+subjects:
+  - kind: ServiceAccount
+    name: contoso-web
+    namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: contoso-web-nodes
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: contoso-web-nodes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: contoso-web-nodes
+subjects:
+  - kind: ServiceAccount
+    name: contoso-web
+    namespace: default
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: contoso-web
+  namespace: default
+  labels:
+    app: contoso-web
+spec:
+  replicas: 1
+  # Chats live in server memory and startup deletes orphaned chat Pods, so never run two.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: contoso-web
+  template:
+    metadata:
+      labels:
+        app: contoso-web
+    spec:
+      serviceAccountName: contoso-web
+      # contoso-web:dev is loaded onto the Kata nodes with image-load.sh.
+      nodeSelector:
+        katacontainers.io/kata-runtime: "true"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web
+          image: contoso-web:dev
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+          env:
+            - name: CONTOSO_BACKEND
+              value: k8s
+            - name: CONTOSO_HOST
+              value: 0.0.0.0
+            - name: CONTOSO_IDLE_SECONDS
+              value: "60"
+            - name: CONTOSO_POD_MEMORY_MIB
+              value: "512"
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8080
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: agent-token
+              mountPath: /var/run/contoso
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: agent-token
+          secret:
+            secretName: contoso-agent-token
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: contoso-web
+  namespace: default
+spec:
+  type: LoadBalancer
+  loadBalancerSourceRanges:
+    - ALLOWED_CIDR
+  selector:
+    app: contoso-web
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
