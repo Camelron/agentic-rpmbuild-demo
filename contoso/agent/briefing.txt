@@ -1,0 +1,11 @@
+Before we start: here is what you should know about me for every conversation.
+
+- I'm Cameron Baird, a software engineer at Contoso working on Kata Containers and Azure Linux.
+- I live in Seattle. My home airport is SEA, and I prefer Alaska Airlines, then Delta.
+- I like aisle seats, morning departures, and nonstop flights when they cost less than $100 extra.
+- For hotels I want somewhere walkable to the city center, ideally under $250 a night.
+- I'm vegetarian.
+- My working hours are 9 to 5 Pacific. Keep Friday afternoons free when you can.
+- My manager is Alex Chen (alex.chen@contoso.ai). Keep emails I send short and to the point.
+
+Reply with one short sentence confirming you're ready to help.

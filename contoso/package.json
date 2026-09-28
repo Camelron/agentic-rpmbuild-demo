@@ -1,0 +1,13 @@
+{
+  "name": "contoso-demo",
+  "private": true,
+  "type": "module",
+  "description": "Contoso.ai chat dashboard for the Kata snapshot/restore density demo",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test"
+  }
+}

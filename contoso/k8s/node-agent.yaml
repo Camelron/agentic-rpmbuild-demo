@@ -1,0 +1,31 @@
+# Privileged helper on each Kata node. It runs nothing itself; the Contoso.ai
+# backend uses `kubectl exec ... nsenter -t 1` to call crictl and kata-ctl in
+# the host namespaces, which avoids starting a node-shell Pod per snapshot.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: contoso-node-agent
+  namespace: default
+  labels:
+    app: contoso-node-agent
+spec:
+  selector:
+    matchLabels:
+      app: contoso-node-agent
+  template:
+    metadata:
+      labels:
+        app: contoso-node-agent
+    spec:
+      nodeSelector:
+        katacontainers.io/kata-runtime: "true"
+      hostPID: true
+      tolerations:
+        - operator: Exists
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: agent
+          image: docker.io/library/debian:bookworm-slim
+          command: ["sleep", "infinity"]
+          securityContext:
+            privileged: true

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Contoso.ai</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <header class="topbar">
+        <div class="brand"><span class="logo" aria-hidden="true">◆</span> Contoso.ai</div>
+        <div class="stats" id="stats" aria-live="polite"></div>
+    </header>
+
+    <div class="layout">
+        <aside class="sidebar">
+            <button id="new-chat" class="new-chat" type="button">+ New chat</button>
+            <ul id="session-list" class="session-list" aria-label="Chats"></ul>
+        </aside>
+
+        <main class="chat">
+            <div id="empty" class="empty">
+                <h2>Welcome to Contoso.ai</h2>
+                <p>Start a new chat. Idle chats are snapshotted and their Pods released; open one to restore it.</p>
+            </div>
+
+            <section id="conversation" class="conversation" hidden>
+                <div class="chat-header">
+                    <div>
+                        <h1 id="chat-title"></h1>
+                        <div id="chat-meta" class="meta"></div>
+                    </div>
+                    <div class="actions">
+                        <button id="suspend" type="button">Suspend</button>
+                        <button id="delete" type="button" class="danger">Delete</button>
+                    </div>
+                </div>
+                <div id="messages" class="messages"></div>
+                <div id="overlay" class="overlay" hidden>
+                    <div class="spinner" aria-hidden="true"></div>
+                    <div id="overlay-text"></div>
+                </div>
+                <form id="composer" class="composer">
+                    <textarea id="input" rows="2" placeholder="Message Contoso.ai" aria-label="Message"></textarea>
+                    <button id="send" type="submit">Send</button>
+                </form>
+            </section>
+        </main>
+    </div>
+
+    <div id="toast" class="toast" role="status" hidden></div>
+    <script type="module" src="/app.js"></script>
+</body>
+</html>
