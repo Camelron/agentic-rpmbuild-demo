@@ -27,8 +27,15 @@ async function api(method, path, body) {
         body: body === undefined ? undefined : JSON.stringify(body),
     });
     if (res.status === 204) return null;
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error?.message ?? `HTTP ${res.status}`);
+    let data = null;
+    try {
+        data = JSON.parse(await res.text());
+    } catch {
+        // A proxy between the browser and the server answered instead, e.g. after a dropped connection.
+    }
+    if (!res.ok || data === null) {
+        throw new Error(data?.error?.message ?? `Lost the connection to the server (HTTP ${res.status}). Try again.`);
+    }
     return data;
 }
 

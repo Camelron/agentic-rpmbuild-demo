@@ -7,46 +7,81 @@ restores too, from a pre-briefed base snapshot.
 
 ## Components
 
+### Live chat
+
 ```mermaid
 flowchart LR
     browser(["Browser"])
     copilot[("GitHub Copilot API")]
 
-    subgraph aks["AKS cluster"]
-        web["Contoso.ai web app<br/>dashboard + session manager"]
-
-        subgraph node["AKS Kata node"]
-            subgraph k1["kata-runtime"]
-                subgraph p1["Pod · chat going idle"]
-                    c1["Copilot"]
-                end
+    subgraph node["AKS Kata node (In the future on ACL)"]
+        web["Contoso.ai web app"]
+        kr["kata-runtime"]
+        subgraph uvm["UVM"]
+            subgraph pod["Pod"]
+                agent["Copilot"]
             end
-            disk[("Snapshots on node disk<br/>contoso-base<br/>one per gray chat")]
-            subgraph k2["kata-runtime"]
-                subgraph p2["Pod · gray chat clicked"]
-                    c2["Copilot"]
-                end
+        end
+        disk[("Snapshots on disk")]
+    end
+
+    browser <-->|"chat"| web
+    web -->|"start Pod"| kr
+    kr -->|"runs"| uvm
+    web <-->|"prompt,<br/>streamed reply"| agent
+    agent -->|"model calls"| copilot
+    kr -.->|"idle 60 s: snapshot,<br/>then delete Pod"| disk
+
+    classDef runtime fill:#2f6fdb,stroke:#1d4fa8,color:#ffffff
+    classDef kata fill:#e8f1ff,stroke:#2f6fdb,stroke-width:2px,color:#0b2a5b
+    classDef pod fill:#eaf7ea,stroke:#2e8b3e,color:#123d18
+    classDef store fill:#fff6e0,stroke:#c88a00,color:#4a3300
+    class kr runtime
+    class uvm kata
+    class pod pod
+    class disk store
+```
+
+Each chat is a Pod inside its own UVM (Kata's utility VM), run by a kata-runtime
+instance. When the chat goes idle, kata-runtime writes the UVM to disk as a snapshot,
+the Pod is deleted, and the chat turns gray. A gray chat has no Pod and uses no memory:
+with 5 chats and 1 in focus, only about 0.5 GiB of memory is in use instead of 2.5 GiB.
+
+### Restoring a gray chat
+
+```mermaid
+flowchart LR
+    browser(["Browser"])
+
+    subgraph node["AKS Kata node (in the future on ACL)"]
+        web["Contoso.ai web app"]
+        disk[("Snapshots on disk<br/>contoso-base<br/>one per gray chat")]
+        kr["kata-runtime"]
+        subgraph uvm["UVM"]
+            subgraph pod["Pod"]
+                agent["Copilot<br/>conversation intact"]
             end
         end
     end
 
-    browser -->|"chats, live replies"| web
-    web -->|"start · suspend · resume<br/>messages"| node
-    k1 ==>|"snapshot,<br/>then delete Pod"| disk
-    disk ==>|"restore,<br/>~1.6 s"| k2
-    c2 -->|"model calls"| copilot
+    browser -->|"click gray chat"| web
+    web -->|"start Pod<br/>from snapshot"| kr
+    disk ==>|"snapshot"| kr
+    kr ==>|"restore<br/>~1.6 s"| uvm
 
+    classDef runtime fill:#2f6fdb,stroke:#1d4fa8,color:#ffffff
     classDef kata fill:#e8f1ff,stroke:#2f6fdb,stroke-width:2px,color:#0b2a5b
     classDef pod fill:#eaf7ea,stroke:#2e8b3e,color:#123d18
     classDef store fill:#fff6e0,stroke:#c88a00,color:#4a3300
-    class k1,k2 kata
-    class p1,p2 pod
+    class kr runtime
+    class uvm kata
+    class pod pod
     class disk store
 ```
 
-Each kata-runtime owns one Pod. Gray chats have no Pod and use no memory; each exists
-only as a snapshot on disk. With 5 chats and 1 in focus, only about 0.5 GiB of memory
-is in use instead of 2.5 GiB.
+A new kata-runtime instance is fed the chat's snapshot from disk and restores the UVM
+where it left off, with the Pod, Copilot, and the conversation already running. New chats
+start the same way, from the pre-briefed `contoso-base` snapshot.
 
 ## Chat lifecycle
 

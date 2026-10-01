@@ -46,7 +46,7 @@ const routes = [
 ];
 
 export function createContosoServer({ manager, publicDir = PUBLIC_DIR }) {
-    return http.createServer(async (req, res) => {
+    const server = http.createServer(async (req, res) => {
         const url = new URL(req.url, "http://localhost");
         try {
             if (url.pathname === "/api/events") {
@@ -67,6 +67,10 @@ export function createContosoServer({ manager, publicDir = PUBLIC_DIR }) {
             else res.end();
         }
     });
+    // Outlast the idle pools of the proxies in front (port-forward, dev tunnel) so a reused connection is never already closed.
+    server.keepAliveTimeout = 10 * 60_000;
+    server.headersTimeout = server.keepAliveTimeout + 1000;
+    return server;
 }
 
 async function handleApi(manager, req, res, pathname) {
